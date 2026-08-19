@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { reactToTouch } from "@/lib/touch.functions";
 import { speakLine } from "@/lib/voice.functions";
 import { useCharacterTouch } from "@/lib/touch/useCharacterTouch";
+import { useTouchQueue } from "@/lib/touch/useTouchQueue";
 import type {
   AiTouchDecision,
   CharacterState,
