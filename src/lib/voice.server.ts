@@ -89,24 +89,76 @@ export async function getVoiceStatus(): Promise<VoiceStatus> {
   };
 }
 
+/** Mood → base delivery. Lower stability = more emotional variation, higher style = more playful. */
+const MOOD_SETTINGS: Record<string, { stability: number; style: number; speed: number }> = {
+  neutral: { stability: 0.55, style: 0.25, speed: 1 },
+  happy: { stability: 0.35, style: 0.6, speed: 1.06 },
+  playful: { stability: 0.25, style: 0.75, speed: 1.1 },
+  shy: { stability: 0.6, style: 0.3, speed: 0.94 },
+  annoyed: { stability: 0.3, style: 0.55, speed: 1.08 },
+  curious: { stability: 0.45, style: 0.45, speed: 1.02 },
+  sad: { stability: 0.7, style: 0.2, speed: 0.9 },
+};
+
+const clamp01 = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
+
+/** voiceTone is free text from the LLM; nudge the base settings with what it describes. */
+function applyTone(
+  base: { stability: number; style: number; speed: number },
+  tone: string | undefined,
+) {
+  const t = (tone ?? "").toLowerCase();
+  let { stability, style, speed } = base;
+
+  const intense = /(excite|shout|yell|angry|panic|flustered|energetic|giggl|laugh|squeal)/.test(t);
+  const gentle = /(soft|calm|quiet|whisper|gentle|tender|sleepy|tired|sad)/.test(t);
+  const playful = /(playful|teasing|flirt|cheeky|sing|silly|mischie)/.test(t);
+  const fast = /(fast|quick|rushed|breathless)/.test(t);
+  const slow = /(slow|drawn|hesitant|shy)/.test(t);
+
+  if (intense) {
+    stability -= 0.15;
+    style += 0.15;
+  }
+  if (gentle) {
+    stability += 0.15;
+    style -= 0.1;
+  }
+  if (playful) style += 0.2;
+  if (fast) speed += 0.08;
+  if (slow) speed -= 0.08;
+
+  return {
+    stability: clamp01(stability, 0.15, 0.85),
+    style: clamp01(style, 0, 0.9),
+    speed: clamp01(speed, 0.8, 1.15),
+  };
+}
+
 export async function synthesize(input: {
   text: string;
   voiceId: string;
+  mood?: string | undefined;
+  voiceTone?: string | undefined;
 }): Promise<{ audioBase64: string }> {
+  const base = MOOD_SETTINGS[input.mood ?? "neutral"] ?? MOOD_SETTINGS["neutral"]!;
+  const settings = applyTone(base, input.voiceTone);
+
   const res = await fetch(
-    `${API}/v1/text-to-speech/${input.voiceId}?output_format=mp3_44100_128`,
+    // 22kHz keeps the payload small so the first line lands fast.
+    `${API}/v1/text-to-speech/${input.voiceId}?output_format=mp3_22050_32`,
     {
       method: "POST",
       headers: { "xi-api-key": apiKey(), "Content-Type": "application/json" },
       body: JSON.stringify({
         text: input.text,
-        model_id: "eleven_multilingual_v2",
+        model_id: "eleven_flash_v2_5",
         voice_settings: {
-          stability: 0.4,
+          stability: settings.stability,
           similarity_boost: 0.75,
-          style: 0.4,
+          style: settings.style,
           use_speaker_boost: true,
-          speed: 1,
+          speed: settings.speed,
         },
       }),
     },
@@ -120,3 +172,4 @@ export async function synthesize(input: {
   const buffer = await res.arrayBuffer();
   return { audioBase64: Buffer.from(buffer).toString("base64") };
 }
+

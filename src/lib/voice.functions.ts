@@ -12,6 +12,8 @@ export const speakLine = createServerFn({ method: "POST" })
       .object({
         text: z.string().min(1).max(600),
         voiceId: z.string().min(1).max(64),
+        mood: z.string().max(32).optional(),
+        voiceTone: z.string().max(200).optional(),
       })
       .parse(data),
   )
