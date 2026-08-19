@@ -46,13 +46,24 @@ export function CharacterScene({ character }: { character: Character }) {
   useEffect(() => () => audioRef.current?.pause(), []);
 
   const playLine = useCallback(
-    async (text: string) => {
+    async (decision: Pick<AiTouchDecision, "speech" | "mood" | "voiceTone">, signal?: AbortSignal) => {
+      const text = decision.speech;
       if (!text.trim()) return;
       try {
         setSpeaking(true);
         const { audioBase64 } = (await speak({
-          data: { text: text.slice(0, 600), voiceId: character.voiceId },
+          data: {
+            text: text.slice(0, 600),
+            voiceId: character.voiceId,
+            mood: decision.mood,
+            voiceTone: decision.voiceTone,
+          },
+          signal,
         })) as { audioBase64: string };
+        if (signal?.aborted) {
+          setSpeaking(false);
+          return;
+        }
         audioRef.current?.pause();
         const audio = new Audio(`data:audio/mpeg;base64,${audioBase64}`);
         audioRef.current = audio;
@@ -61,6 +72,7 @@ export function CharacterScene({ character }: { character: Character }) {
         await audio.play();
       } catch (error) {
         setSpeaking(false);
+        if (signal?.aborted) return;
         toast.error(error instanceof Error ? error.message : "Voice playback failed.");
       }
     },
@@ -74,11 +86,19 @@ export function CharacterScene({ character }: { character: Character }) {
     interactionCount: 0,
   });
   const [turns, setTurns] = useState<TouchTurn[]>([]);
-  const [thinking, setThinking] = useState(false);
   const [animation, setAnimation] = useState<AiTouchDecision["animation"]>("idle");
   const [animKey, setAnimKey] = useState(0);
   const [ripple, setRipple] = useState<{ x: number; y: number; id: number } | null>(null);
-  const inflight = useRef(false);
+
+  // Latest values for the queue worker, so no touch is processed with stale context.
+  const stateRef = useRef(state);
+  const turnsRef = useRef(turns);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+  useEffect(() => {
+    turnsRef.current = turns;
+  }, [turns]);
 
   const latest = turns[0];
 
@@ -87,57 +107,60 @@ export function CharacterScene({ character }: { character: Character }) {
     setAnimKey((k) => k + 1);
   }, []);
 
+  const process = useCallback(
+    async (touch: TouchEventPayload, signal: AbortSignal) => {
+      const decision = (await call({
+        data: {
+          character: {
+            name: character.name,
+            title: character.title,
+            tagline: character.tagline,
+            traits: character.traits,
+          },
+          state: stateRef.current,
+          touch,
+          history: turnsRef.current.slice(0, 6).map((t) => ({
+            region: t.touch.region,
+            kind: t.touch.kind,
+            durationMs: t.touch.durationMs,
+            repeatCount: t.touch.repeatCount,
+            mood: t.decision.mood,
+            speech: t.decision.speech,
+          })),
+        },
+        signal,
+      })) as AiTouchDecision;
+
+      if (signal.aborted) return;
+
+      play(decision.animation);
+      setState((prev) => ({
+        mood: decision.mood,
+        affinity: clamp(prev.affinity + decision.affinityDelta),
+        energy: clamp(prev.energy + decision.energyDelta),
+        interactionCount: prev.interactionCount + 1,
+      }));
+      setTurns((prev) => [{ touch, decision }, ...prev].slice(0, 12));
+      await playLine(decision, signal);
+    },
+    [call, character, playLine, play],
+  );
+
+  const { enqueue, busy: thinking } = useTouchQueue({ process });
+
   const handleTouch = useCallback(
-    async (touch: TouchEventPayload) => {
+    (touch: TouchEventPayload) => {
       setRipple({ x: touch.x, y: touch.y, id: Date.now() });
       play(instantAnimation(touch));
-      if (inflight.current) return;
-      inflight.current = true;
-      setThinking(true);
-      try {
-        const decision = (await call({
-          data: {
-            character: {
-              name: character.name,
-              title: character.title,
-              tagline: character.tagline,
-              traits: character.traits,
-            },
-            state,
-            touch,
-            history: turns.slice(0, 6).map((t) => ({
-              region: t.touch.region,
-              kind: t.touch.kind,
-              durationMs: t.touch.durationMs,
-              repeatCount: t.touch.repeatCount,
-              mood: t.decision.mood,
-              speech: t.decision.speech,
-            })),
-          },
-        })) as AiTouchDecision;
-
-        play(decision.animation);
-        setState((prev) => ({
-          mood: decision.mood,
-          affinity: clamp(prev.affinity + decision.affinityDelta),
-          energy: clamp(prev.energy + decision.energyDelta),
-          interactionCount: prev.interactionCount + 1,
-        }));
-        setTurns((prev) => [{ touch, decision }, ...prev].slice(0, 12));
-        void playLine(decision.speech);
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : "The character could not respond.");
-      } finally {
-        inflight.current = false;
-        setThinking(false);
-      }
+      enqueue(touch);
     },
-    [call, character, state, turns, playLine, play],
+    [enqueue, play],
   );
 
   const { frameRef, pressPoint, livePoint, pressing, handlers } = useCharacterTouch({
     onTouch: handleTouch,
   });
+
 
   const liveRigStyle = useMemo(() => {
     const point = livePoint ?? { x: 0.5, y: 0.5 };
