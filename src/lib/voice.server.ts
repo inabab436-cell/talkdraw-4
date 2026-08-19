@@ -138,8 +138,8 @@ function applyTone(
 export async function synthesize(input: {
   text: string;
   voiceId: string;
-  mood?: string;
-  voiceTone?: string;
+  mood?: string | undefined;
+  voiceTone?: string | undefined;
 }): Promise<{ audioBase64: string }> {
   const base = MOOD_SETTINGS[input.mood ?? "neutral"] ?? MOOD_SETTINGS["neutral"]!;
   const settings = applyTone(base, input.voiceTone);
