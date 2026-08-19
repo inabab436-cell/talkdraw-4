@@ -51,15 +51,16 @@ export function CharacterScene({ character }: { character: Character }) {
       if (!text.trim()) return;
       try {
         setSpeaking(true);
-        const { audioBase64 } = (await speak({
+        const payload = {
           data: {
             text: text.slice(0, 600),
             voiceId: character.voiceId,
             mood: decision.mood,
             voiceTone: decision.voiceTone,
           },
-          signal,
-        })) as { audioBase64: string };
+          ...(signal ? { signal } : {}),
+        };
+        const { audioBase64 } = (await speak(payload)) as { audioBase64: string };
         if (signal?.aborted) {
           setSpeaking(false);
           return;
@@ -261,7 +262,7 @@ export function CharacterScene({ character }: { character: Character }) {
             ) : latest ? (
               <button
                 type="button"
-                onClick={() => void playLine(latest.decision.speech)}
+                onClick={() => void playLine(latest.decision)}
                 className="panel pointer-events-auto inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
               >
                 <Volume2 className="h-3.5 w-3.5" />
